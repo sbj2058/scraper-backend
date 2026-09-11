@@ -6,13 +6,22 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 from playwright.sync_api import sync_playwright
 
-# 1. Instantiate Flask application (Explicitly named 'app' for Gunicorn)
 app = Flask(__name__)
-
-# 2. Enable CORS to allow requests from your GitHub Pages frontend
 CORS(app)
 
 DATA_STORE = []
+
+def create_authenticated_context(browser, auth_token):
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+    if auth_token:
+        if auth_token.lower().startswith("bearer ") or auth_token.startswith("ey"):
+            headers["Authorization"] = auth_token if auth_token.lower().startswith("bearer ") else f"Bearer {auth_token}"
+        else:
+            headers["Cookie"] = auth_token
+
+    return browser.new_context(extra_http_headers=headers)
 
 def parse_text_block(category_name, text):
     records = []
@@ -33,16 +42,16 @@ def parse_text_block(category_name, text):
 @app.route('/')
 @app.route('/health')
 def health_check():
-    """Health check endpoint for Render monitoring."""
     return jsonify({"status": "healthy", "service": "Playwright Scraper Engine"}), 200
 
 @app.route('/api/fetch-categories', methods=['POST'])
 def fetch_categories():
     data = request.json or {}
     url = data.get('url', '').strip()
+    auth_token = data.get('auth_token', '').strip()
 
     if not url:
-        return jsonify({"success": False, "error": "URL parameter is missing"}), 400
+        return jsonify({"success": False, "error": "URL parameter is required"}), 400
 
     try:
         with sync_playwright() as p:
@@ -50,17 +59,12 @@ def fetch_categories():
                 headless=True,
                 args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
             )
-            # Create context with custom user agent to reduce bot detection
-            context = browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-            )
+            context = create_authenticated_context(browser, auth_token)
             page = context.new_page()
             
-            # Go to URL with broader wait strategy
             page.goto(url, timeout=30000, wait_until="networkidle")
             time.sleep(3)
 
-            # Query sidebar tabs with enhanced selectors
             tab_candidates = page.locator("""
                 aside button, aside a, aside li, aside [role="button"], aside [role="tab"],
                 div[class*="sidebar"] button, div[class*="sidebar"] a, div[class*="sidebar"] li,
@@ -103,9 +107,10 @@ def scrape():
     url = data.get('url', '').strip()
     selected_cats = data.get('categories', [])
     max_pages = int(data.get('max_pages', 3))
+    auth_token = data.get('auth_token', '').strip()
 
     if not url or not selected_cats:
-        return jsonify({"success": False, "error": "URL and categories are required"}), 400
+        return jsonify({"success": False, "error": "URL and selected categories are required"}), 400
 
     all_records = []
     try:
@@ -114,9 +119,11 @@ def scrape():
                 headless=True,
                 args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
             )
-            page = browser.new_page()
-            page.goto(url, timeout=30000, wait_until="domcontentloaded")
-            time.sleep(2)
+            context = create_authenticated_context(browser, auth_token)
+            page = context.new_page()
+
+            page.goto(url, timeout=30000, wait_until="networkidle")
+            time.sleep(3)
 
             for cat in selected_cats:
                 escaped_cat = re.escape(cat)
