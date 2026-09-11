@@ -46,41 +46,48 @@ def fetch_categories():
 
     try:
         with sync_playwright() as p:
-            # Launch Chromium with headless flags optimized for container environments
             browser = p.chromium.launch(
                 headless=True,
                 args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
             )
-            page = browser.new_page()
-            page.goto(url, timeout=30000, wait_until="domcontentloaded")
-            time.sleep(2)
+            # Create context with custom user agent to reduce bot detection
+            context = browser.new_context(
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            )
+            page = context.new_page()
+            
+            # Go to URL with broader wait strategy
+            page.goto(url, timeout=30000, wait_until="networkidle")
+            time.sleep(3)
 
+            # Query sidebar tabs with enhanced selectors
             tab_candidates = page.locator("""
                 aside button, aside a, aside li, aside [role="button"], aside [role="tab"],
                 div[class*="sidebar"] button, div[class*="sidebar"] a, div[class*="sidebar"] li,
                 div[class*="sidebar"] [role="button"], div[class*="sidebar"] [role="tab"],
-                div[class*="nav"] button, div[class*="nav"] a, div[class*="menu"] div
+                div[class*="nav"] button, div[class*="nav"] a, div[class*="menu"] div,
+                button[class*="tab"], div[class*="tab"]
             """).all()
-
-            if not tab_candidates:
-                tab_candidates = page.locator("aside > div, div[class*='sidebar'] > div, ul > li").all()
 
             cats = []
             for el in tab_candidates:
-                raw_text = el.inner_text().strip()
-                if not raw_text:
-                    continue
-                lines = [line.strip() for line in raw_text.split('\n') if line.strip()]
-                if not lines:
-                    continue
-                title = lines[0]
+                try:
+                    raw_text = el.inner_text().strip()
+                    if not raw_text:
+                        continue
+                    lines = [line.strip() for line in raw_text.split('\n') if line.strip()]
+                    if not lines:
+                        continue
+                    title = lines[0]
 
-                if (
-                    len(title) > 2
-                    and not re.search(r'^\d+\s*requests?$', title, re.IGNORECASE)
-                    and title not in cats
-                ):
-                    cats.append(title)
+                    if (
+                        len(title) > 2
+                        and not re.search(r'^\d+\s*requests?$', title, re.IGNORECASE)
+                        and title not in cats
+                    ):
+                        cats.append(title)
+                except Exception:
+                    continue
 
             browser.close()
 
